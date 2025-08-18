@@ -363,7 +363,7 @@ class DbtSource(DbtServiceSource):
 
     def _process_model_meta_fields(
         self, data_model_link: DataModelLink, manifest_node: Any
-    ):
+    ) -> Iterable[Either[PatchRequest]]:
         """
         Processes customProperties fields of dbt model as Openmetadata table's custom properties
         """
@@ -382,7 +382,7 @@ class DbtSource(DbtServiceSource):
                 f"Processing {len(custom_properties)} custom_properties for table {table_fqn}"
             )
 
-            self._update_table_custom_properties(
+            yield from self._update_table_custom_properties(
                 data_model_link.table_entity, custom_properties
             )
         except Exception as exc:
@@ -392,7 +392,7 @@ class DbtSource(DbtServiceSource):
 
     def _update_table_custom_properties(
         self, table_entity: Table, custom_properties: Dict[str, Any]
-    ):
+    ) -> Iterable[Either[PatchRequest]]:
         """
         Filters, converts and applies valid customProperties
         """
@@ -434,13 +434,15 @@ class DbtSource(DbtServiceSource):
             valid_custom_properties[field_name] = converted_value
 
         if valid_custom_properties:
-            self._apply_custom_properties_to_table(
+            patch_request = self._apply_custom_properties_to_table(
                 table_entity, valid_custom_properties
             )
+            if patch_request:
+                yield Either(right=patch_request)
 
     def _apply_custom_properties_to_table(
         self, table_entity: Table, custom_properties: Dict[str, Any]
-    ):
+    ) -> Optional[PatchRequest]:
         """
         Applies custom properties to table via extension
         """
@@ -453,7 +455,7 @@ class DbtSource(DbtServiceSource):
                 logger.warning(
                     f"Table {table_entity.fullyQualifiedName.root} not found"
                 )
-                return
+                return None
 
             updated_table = current_table.model_copy(deep=True)
 
@@ -467,27 +469,24 @@ class DbtSource(DbtServiceSource):
             final_data = {**existing_data, **custom_properties}
             updated_table.extension = EntityExtension(root=final_data)
 
-            result = self.metadata.patch(
-                entity=Table, source=current_table, destination=updated_table
+            logger.info(
+                f"Successfully prepared {len(custom_properties)} customProperties "
+                f"for table {table_entity.fullyQualifiedName.root}"
             )
 
-            if result:
-                logger.info(
-                    f"Successfully updated {len(custom_properties)} customProperties "
-                    f"for table {table_entity.fullyQualifiedName.root}"
-                )
-            else:
-                logger.warning(
-                    f"Failed to update customProperties for table "
-                    f"{table_entity.fullyQualifiedName.root}"
-                )
+            return PatchRequest(
+                original_entity=current_table,
+                new_entity=updated_table,
+                override_metadata=True,
+            )
 
         except Exception as exc:
             logger.error(
-                f"Error applying customProperties to table "
+                f"Error preparing customProperties for table "
                 f"{table_entity.fullyQualifiedName.root}: {exc}"
             )
             logger.debug(traceback.format_exc())
+            return None
 
     def process_dbt_domain(self, data_model_link: DataModelLink):
         """
@@ -707,7 +706,7 @@ class DbtSource(DbtServiceSource):
     # pylint: disable=too-many-locals, too-many-branches
     def yield_data_models(
         self, dbt_objects: DbtObjects
-    ) -> Iterable[Either[DataModelLink]]:
+    ) -> Iterable[Either[Union[DataModelLink, PatchRequest]]]:
         """
         Yield the data models
         """
@@ -865,7 +864,8 @@ class DbtSource(DbtServiceSource):
                             ),
                         )
 
-                        self._process_model_meta_fields(data_model_link, manifest_node)
+                        # Yield custom properties patch requests
+                        yield from self._process_model_meta_fields(data_model_link, manifest_node)
 
                         domain_ref = self.get_dbt_domain(manifest_node)
                         if domain_ref:
