@@ -216,7 +216,7 @@ def get_data_model_path(manifest_node):
 
 def extract_meta_fields_from_node(node: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Extracts customProperties fields from dbt manifest node from meta.openmetadata.customProperties
+    Extracts custom_properties fields from dbt manifest node from meta.openmetadata.custom_properties
     """
     try:
         if hasattr(node, "meta"):
